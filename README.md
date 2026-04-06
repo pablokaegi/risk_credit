@@ -78,14 +78,30 @@ By expanding the definition to **Financial Distress**, the model captures compan
 
 ## Dataset Description
 
-### Data Sources
+### Primary Data Source: BCRA APIs
 
-| Source | Content | Frequency | Coverage |
-|--------|---------|-----------|----------|
-| **CNV Autoconvocatoria** | Quarterly financial statements (Balance Sheet, Income Statement, Cash Flow) | Quarterly (Q1-Q4) | All BYMA-listed companies |
-| **BYMA Market Data** | Trading volume, market cap, price volatility | Daily | Panel General and Panel Líder |
-| **BCRA Statistical Series** | MACRO indicators (inflation, FX rate, M2) | Monthly | Argentina-wide |
-| **CNV Material Events** | Auditor resignations, debt restructuring announcements | Ad hoc | All BYMA-listed companies |
+**This project uses official APIs from the Central Bank of Argentina (BCRA), which is the GOLD STANDARD for Argentine credit risk data.**
+
+| API | Content | Why It Matters |
+|-----|---------|----------------|
+| **Central de Deudores** | Complete debt registry for ALL Argentine companies | **Primary distress indicator** - shows real debt situations |
+| **Cheques Denunciados** | Rejected checks due to insufficient funds | **Strong distress signal** - indicates cash flow problems |
+| **Estadísticas Cambiarias** | Official dollar rate, reserves | Macro context for USD-denominated debt |
+| **Estadísticas Monetarias** | Interest rates, monetary aggregates | Cost of capital context |
+| **Régimen de Transparencia** | Regulatory transparency data | Compliance status |
+
+**Why BCRA APIs are superior:**
+
+| Feature | BCRA APIs | Yahoo Finance | CNV Scraping |
+|---------|-----------|---------------|--------------|
+| **Coverage** | ALL Argentine companies | ~15 ADRs only | ~80 BYMA companies |
+| **Data Quality** | Official, audited data | Third-party estimates | Unstable scraping |
+| **Distress Signals** | ✅ Cheques denunciados, deuda real | ❌ Not available | ⚠️ Limited |
+| **Professionalism** | Official API, documented | Side project | Unstable |
+| **Maintenance** | Proactively maintained | Community-driven | Breaks frequently |
+
+**API Documentation:** https://api.bcra.gob.ar
+**Contact:** api@bcra.gob.ar
 
 ### Target Variable Definition
 
