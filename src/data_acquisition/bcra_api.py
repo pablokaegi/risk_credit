@@ -58,7 +58,7 @@ class BCRAAPIClient:
     Example:
         >>> client = BCRAAPIClient()
         >>> deudores = client.get_central_deudores(cuit='30-12345678-9')
-        >>> cheques = client.get_cheques_denunciados()
+        >>> cheque = client.get_cheques_denunciados(codigo_entidad=11, numero_cheque=20377516)
         >>> dollar_rate = client.get_dollar_rate()
     """
     
@@ -70,8 +70,8 @@ class BCRAAPIClient:
         'central_deudores_entidades': '/api/v1/central/deudores/entidades',
         
         # Cheques Denunciados - Rejected checks
-        'cheques_denunciados': '/api/v1/cheques/denunciados',
-        'cheques_por_entidad': '/api/v1/cheques/denunciados/entidad/{entidad}',
+        'cheques_entidades': '/cheques/v1.0/entidades',
+        'cheques_denunciados': '/cheques/v1.0/denunciados/{codigo_entidad}/{numero_cheque}',
         
         # Estadísticas Cambiarias - Exchange rates
         'estadisticas_cambiarias': '/api/v1/estadisticascambiarias',
@@ -182,11 +182,21 @@ class BCRAAPIClient:
                 # Cache response
                 if self.cache_enabled:
                     cache_file.parent.mkdir(parents=True, exist_ok=True)
-                    withopen(cache_file, 'w', encoding='utf-8') as f:
+                    with open(cache_file, 'w', encoding='utf-8') as f:
                         import json
                         json.dump(data, f, indent=2)
                 
                 return data
+
+            except requests.HTTPError as e:
+                status_code = e.response.status_code if e.response is not None else None
+
+                if status_code is not None and 400 <= status_code < 500 and status_code not in {408, 429}:
+                    logger.error(
+                        f"Permanent client error for {url}: {e}. "
+                        "Verify the published BCRA endpoint before retrying."
+                    )
+                    raise
                 
             except requests.RequestException as e:
                 logger.warning(f"Request failed (attempt {attempt}): {e}")
@@ -251,63 +261,54 @@ class BCRAAPIClient:
     
     def get_cheques_denunciados(
         self,
-        cuit: Optional[str] = None,
-        fecha_desde: Optional[str] = None,
-        fecha_hasta: Optional[str] = None,
+        codigo_entidad: int,
+        numero_cheque: int,
         as_dataframe: bool = True
     ) -> Union[Dict, pd.DataFrame]:
         """
-        Get rejected checks (cheques denunciados por fondos insuficientes).
+        Query whether a specific check is reported as denounced.
         
-        Checks are denounced when there are insufficient funds in the account.
-        This is a STRONG indicator of financial distress for companies.
-        
-        Multiple rejected checks indicate:
-            - Cash flow problems
-            - Payment difficulties
-            - Potential bankruptcy risk
+        According to the official BCRA Cheques API manual, this endpoint requires
+        both the financial entity code and the check number. The API does not
+        expose bulk search by CUIT.
         
         Args:
-            cuit: Specific CUIT to query (default: all)
-            fecha_desde: Start date 'YYYY-MM-DD' (default: last 30 days)
-            fecha_hasta: End date 'YYYY-MM-DD' (default: today)
+            codigo_entidad: Entity code from get_cheques_entidades()
+            numero_cheque: Check number to query
             as_dataframe: Return as DataFrame (default: True)
             
         Returns:
             DataFrame with columns:
-            - cuit: Tax ID of check issuer
             - numero_cheque: Check number
-            - monto: Check amount
-            - fecha_rechazo: Rejection date
-            - entidad: Financial entity
-            - motivo: Reason for rejection
+            - denunciado: Whether the check is denounced
+            - fecha_procesamiento: Processing date
+            - denominacion_entidad: Entity name
+            - cantidad_detalles: Number of detail rows
+            - causales: Semicolon-separated causes
             
         Example:
             >>> client = BCRAAPIClient()
-            >>> rejected_checks = client.get_cheques_denunciados()
-            >>> # Companies with multiple rejected checks
-            >>> distress_companies = rejected_checks.groupby('cuit').size()
-            >>> distress_companies = distress_companies[distress_companies >2]
+            >>> cheque = client.get_cheques_denunciados(codigo_entidad=11, numero_cheque=20377516)
+            >>> print(cheque[['numero_cheque', 'denunciado']])
         """
-        # Default to last 30 days if no dates provided
-        if not fecha_desde:
-            fecha_desde = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        if not fecha_hasta:
-            fecha_hasta = datetime.now().strftime('%Y-%m-%d')
-        
-        params = {
-            'fechaDesde': fecha_desde,
-            'fechaHasta': fecha_hasta
-        }
-        
-        if cuit:
-            params['cuit'] = cuit
-        
-        data = self._make_request(self.ENDPOINTS['cheques_denunciados'], params=params)
+        endpoint = self.ENDPOINTS['cheques_denunciados'].format(
+            codigo_entidad=int(codigo_entidad),
+            numero_cheque=int(numero_cheque)
+        )
+        data = self._make_request(endpoint)
         
         if as_dataframe:
             return self._parse_cheques_denunciados(data)
         
+        return data
+
+    def get_cheques_entidades(self, as_dataframe: bool = True) -> Union[Dict, pd.DataFrame]:
+        """Get the list of financial entities available in the Cheques API."""
+        data = self._make_request(self.ENDPOINTS['cheques_entidades'])
+
+        if as_dataframe:
+            return self._parse_cheques_entidades(data)
+
         return data
     
     def get_dollar_rate(
@@ -461,7 +462,8 @@ class BCRAAPIClient:
         cuit: str,
         include_cheques: bool = True,
         include_deuda: bool = True,
-        days_back: int = 90
+        days_back: int = 90,
+        cheque_queries: Optional[List[Dict[str, int]]] = None
     ) -> Dict:
         """
         Fetch all distress signals for a specific company.
@@ -476,6 +478,8 @@ class BCRAAPIClient:
             include_cheques: Whether to include rejected checks
             include_deuda: Whether to include debt information
             days_back: Days to look back for rejected checks
+            cheque_queries: Optional list of real check queries. Each item must
+                contain 'codigo_entidad' and 'numero_cheque'.
             
         Returns:
             Dictionary with distress indicators:
@@ -498,6 +502,7 @@ class BCRAAPIClient:
             'situacion': 1,
             'cheques_rechazados': 0,
             'monto_cheques_rechazados': 0,
+            'cheques_consultados': 0,
             'riesgo': 0
         }
         
@@ -517,14 +522,29 @@ class BCRAAPIClient:
             
             # Get rejected checks
             if include_cheques:
-                fecha_desde = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
-                cheques_df = self.get_cheques_denunciados(cuit=cuit, fecha_desde=fecha_desde)
-                
-                if not cheques_df.empty:
-                    distress_data['cheques_rechazados'] = len(cheques_df)
-                    distress_data['monto_cheques_rechazados'] = cheques_df['monto'].sum()
-                    
-                    logger.info(f"Rejected checks for {cuit}: {distress_data['cheques_rechazados']} checks totaling ${distress_data['monto_cheques_rechazados']:,.2f}")
+                if not cheque_queries:
+                    logger.info(
+                        "Skipping cheques lookup for %s: the official API requires "
+                        "codigo_entidad and numero_cheque for each consultation.",
+                        cuit,
+                    )
+                else:
+                    distress_data['cheques_consultados'] = len(cheque_queries)
+                    for query in cheque_queries:
+                        cheque_df = self.get_cheques_denunciados(
+                            codigo_entidad=query['codigo_entidad'],
+                            numero_cheque=query['numero_cheque']
+                        )
+
+                        if not cheque_df.empty and bool(cheque_df.iloc[0]['denunciado']):
+                            distress_data['cheques_rechazados'] += 1
+
+                    logger.info(
+                        "Cheque queries for %s: %s checked, %s denounced",
+                        cuit,
+                        distress_data['cheques_consultados'],
+                        distress_data['cheques_rechazados'],
+                    )
             
             # Calculate risk score (0-100)
             distress_data['riesgo'] = self._calculate_risk_score(distress_data)
@@ -629,28 +649,43 @@ class BCRAAPIClient:
         return df
     
     def _parse_cheques_denunciados(self, data: Dict) -> pd.DataFrame:
-        """Parse Cheques Denunciados JSON response to DataFrame."""
-        results = data.get('results', [])
-        
+        """Parse Cheques Denunciados JSON response to a one-row DataFrame."""
+        results = data.get('results', {})
+
         if not results:
             return pd.DataFrame()
-        
-        df = pd.DataFrame(results)
-        
-        # Standardize column names
-        column_mapping = {
-            'cuitDenunciado': 'cuit',
-            'numeroCheque': 'numero_cheque',
-            'importe': 'monto',
-            'fechaRechazo': 'fecha_rechazo',
-            'codigoEntidad': 'entidad',
-            'causaRechazo': 'motivo'
+
+        detalles = results.get('detalles', [])
+        row = {
+            'numero_cheque': results.get('numeroCheque'),
+            'denunciado': results.get('denunciado', False),
+            'fecha_procesamiento': results.get('fechaProcesamiento'),
+            'denominacion_entidad': results.get('denominacionEntidad'),
+            'cantidad_detalles': len(detalles),
+            'causales': '; '.join(
+                sorted({detalle.get('causal') for detalle in detalles if detalle.get('causal')})
+            ),
+            'detalles': detalles,
         }
-        
-        df = df.rename(columns=column_mapping)
-        
-        logger.info(f"Parsed {len(df)} rejected checks")
-        
+
+        logger.info("Parsed cheque query for %s", row['numero_cheque'])
+
+        return pd.DataFrame([row])
+
+    def _parse_cheques_entidades(self, data: Dict) -> pd.DataFrame:
+        """Parse the Cheques entities endpoint to DataFrame."""
+        results = data.get('results', [])
+
+        if not results:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(results).rename(
+            columns={
+                'codigoEntidad': 'codigo_entidad',
+                'denominacion': 'denominacion',
+            }
+        )
+        logger.info("Parsed %s cheque entities", len(df))
         return df
     
     def _parse_estadisticas_cambiarias(self, data: Dict) -> pd.DataFrame:
@@ -754,10 +789,6 @@ def create_training_dataset(
         logger.info("Fetching debt information from Central de Deudores...")
         deuda_df = client.get_central_deudores()
         
-        # Fetch rejected checks
-        logger.info("Fetching rejected checks from Cheques Denunciados...")
-        cheques_df = client.get_cheques_denunciados()
-        
         # Aggregate by CUIT
         if not deuda_df.empty:
             debt_by_cuit = deuda_df.groupby('cuit').agg({
@@ -767,21 +798,11 @@ def create_training_dataset(
             }).reset_index()
             debt_by_cuit.columns = ['cuit', 'deuda_total', 'peor_situacion', 'num_entidades']
         
-        if not cheques_df.empty:
-            cheques_by_cuit = cheques_df.groupby('cuit').agg({
-                'monto': ['count', 'sum']
-            }).reset_index()
-            cheques_by_cuit.columns = ['cuit', 'cheques_rechazados', 'monto_total_rechazado']
-        
-        # Merge datasets
-        if not deuda_df.empty and not cheques_df.empty:
-            dataset = pd.merge(
-                debt_by_cuit,
-                cheques_by_cuit,
-                on='cuit',
-                how='outer'
-            )
-        elif not deuda_df.empty:
+        # Cheques Denunciados v1.0 does not expose bulk search by CUIT, so the
+        # training dataset cannot enrich all companies with cheque signals unless
+        # the calling code already has concrete (codigo_entidad, numero_cheque)
+        # pairs to query individually.
+        if not deuda_df.empty:
             dataset = debt_by_cuit
             dataset['cheques_rechazados'] =0
             dataset['monto_total_rechazado'] = 0
@@ -855,10 +876,12 @@ def main():
     )
     parser.add_argument(
         '--endpoint',
-        choices=['deudores', 'cheques', 'dollar', 'reservas', 'tasas'],
+        choices=['deudores', 'cheques', 'cheques-entidades', 'dollar', 'reservas', 'tasas'],
         default='deudores',
         help='BCRA API endpoint to use'
     )
+    parser.add_argument('--codigo-entidad', type=int, help='Entity code for Cheques API')
+    parser.add_argument('--numero-cheque', type=int, help='Check number for Cheques API')
     
     args = parser.parse_args()
     
@@ -868,7 +891,14 @@ def main():
         if args.endpoint == 'deudores':
             df = client.get_central_deudores(cuit=args.cuit)
         elif args.endpoint == 'cheques':
-            df = client.get_cheques_denunciados(cuit=args.cuit)
+            if args.codigo_entidad is None or args.numero_cheque is None:
+                raise ValueError('--codigo-entidad and --numero-cheque are required for endpoint cheques')
+            df = client.get_cheques_denunciados(
+                codigo_entidad=args.codigo_entidad,
+                numero_cheque=args.numero_cheque,
+            )
+        elif args.endpoint == 'cheques-entidades':
+            df = client.get_cheques_entidades()
         elif args.endpoint == 'dollar':
             df = client.get_dollar_rate()
         elif args.endpoint == 'reservas':

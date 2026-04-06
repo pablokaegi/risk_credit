@@ -2,6 +2,8 @@
 
 ## Overview
 
+> Status note (2026-04-05): Cheques Denunciados v1.0 was revalidated and integrated with the live routes `cheques/v1.0/entidades` and `cheques/v1.0/denunciados/{codigoEntidad}/{numeroCheque}`. The remaining BCRA sections in this file still need to be checked against their current manuals.
+
 This project uses **official APIs from the Banco Central de la República Argentina (BCRA)**, which provides the most comprehensive and reliable data for credit risk analysis in Argentina.
 
 ## Why BCRA APIs?

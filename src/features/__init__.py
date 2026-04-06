@@ -17,6 +17,7 @@ Author: Pablo Kaegi
 Version: 1.0.0
 """
 
+import json
 import logging
 from typing import Dict, List, Optional, Tuple, Union
 from pathlib import Path
@@ -697,5 +698,4 @@ def main():
 
 if __name__ == '__main__':
     import sys
-    import json
     sys.exit(main())

@@ -37,6 +37,7 @@ setup(
     install_requires=requirements,
     entry_points={
         "console_scripts": [
+            "bcra-api=src.data_acquisition.bcra_api:main",
             "cnv-scraper=src.data_acquisition.cnv_scraper:main",
             "ratio-calculator=src.features.ratio_calculator:main",
             "train-model=src.model.classifier:main",

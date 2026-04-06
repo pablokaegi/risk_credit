@@ -80,6 +80,10 @@ By expanding the definition to **Financial Distress**, the model captures compan
 
 ### Primary Data Source: BCRA APIs
 
+> Status note (2026-04-05): the BCRA endpoints wired into the current codebase returned HTTP 404 during validation. The integration code is preserved, but the published routes should be revalidated before treating BCRA ingestion as production-ready.
+
+> Update (2026-04-05): the Cheques Denunciados API was revalidated against the official manual and now uses the live `cheques/v1.0/entidades` and `cheques/v1.0/denunciados/{codigoEntidad}/{numeroCheque}` routes. Other BCRA modules still need their updated manuals before they can be treated as verified.
+
 **This project uses official APIs from the Central Bank of Argentina (BCRA), which is the GOLD STANDARD for Argentine credit risk data.**
 
 | API | Content | Why It Matters |

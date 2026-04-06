@@ -10,7 +10,18 @@ regulatory sources:
 
 from src.data_acquisition.bcra_api import BCRAAPIClient, create_training_dataset
 
+try:
+    from src.data_acquisition.yfinance_fetcher import (
+        YFinanceDataFetcher,
+        download_and_prepare_dataset,
+    )
+except ImportError:  # pragma: no cover - optional dependency in partial installs
+    YFinanceDataFetcher = None
+    download_and_prepare_dataset = None
+
 __all__ = [
     "BCRAAPIClient",
     "create_training_dataset",
+    "YFinanceDataFetcher",
+    "download_and_prepare_dataset",
 ]
